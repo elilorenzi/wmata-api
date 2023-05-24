@@ -1,5 +1,6 @@
 import requests
 import time
+import readchar
 
 def sort_by_arrival(train_data):
     arrival_time_index = 3
@@ -14,9 +15,28 @@ def sort_by_arrival(train_data):
         return 50
     elif(arrival_time) == '---':
         return 51
+    #add a generic catch here
     else:
-        return int(arrival_time)
+        try:
+            return int(arrival_time)
+        except Exception as e:
+            return 52
 
+def construct_multi_track_station_code_mapa(stations_data):
+    multi_track_station_code_map = {}
+    stations_data_list = stations_data['Stations']
+    for station in stations_data_list:
+        station_name = station['Name']
+        station_code = station['Code']
+        for station_two in stations_data_list:
+            station_two_name = station_two['Name']
+            station_two_code = station_two['Code']
+            if(station_name == station_two_name and station_code != station_two_code):
+                multi_track_station_code_map[station_code] = station_two_code
+    return multi_track_station_code_map
+
+line_index = 0
+station_index = 0
 while True:
     try:
         api_key = 'b18ceda221c645d5bd1d5386f40ca0e1'
@@ -26,16 +46,17 @@ while True:
         }
         stations_endpoint = "/Rail.svc/json/jStations/"
         line_codes = ['RD', 'BL', 'YL', 'OR', 'GR', 'SV']
-        line_index = 0
-        station_index = 0
+        healthy_status = 200
+        multi_track_station_code_map = {}
 
         #get all the station codes for the current line:
         line_code = line_codes[line_index]
         stations_url = base_url + stations_endpoint
         response = requests.get(stations_url, headers = headers)
         filtered_station_data = []
-        if response.status_code == 200:
+        if response.status_code == healthy_status:
             stations_data = response.json()
+            multi_track_station_code_map = construct_multi_track_station_code_mapa(stations_data)
             for elem in stations_data['Stations']:
                 if elem['LineCode1'] == line_code or elem['LineCode2'] == line_code or elem['LineCode3'] == line_code:
                     filtered_station_data.append(elem)
@@ -57,16 +78,16 @@ while True:
         response = requests.get(arrivals_url, headers=headers)
 
         # If success, format and print data
-        if response.status_code == 200:
+        if response.status_code == healthy_status:
             data = response.json()
             filtered_trains = []
             for train in data['Trains']:
                 filtered_train = [train['Line'], train['Car'], train['Destination'], train['Min']]
-                filtered_trains.append(filtered_train)
+                #filter out trains that aren't on a line, such as no passenger
+                if not filtered_train[1] in line_codes:
+                    filtered_trains.append(filtered_train)
 
             #check for station that has more than one track
-            #for now we hard code this, in the future we want to construct using station data to allow for automatic update
-            multi_track_station_code_map = {'A04':'C01', 'B01':'F01', 'D03':'F03', 'B06':'E06', 'C01':'A04', 'F01':'B01', 'F03':'D03', 'E06':'B06'}
             if station_code in multi_track_station_code_map.keys():
                 #get the data for the second track too
                 additional_arrivals_endpoint = 'StationPrediction.svc/json/GetPrediction/' + multi_track_station_code_map[station_code]
@@ -76,7 +97,8 @@ while True:
                     additional_data = additional_response.json()
                     for train in additional_data['Trains']:
                         filtered_train = [train['Line'], train['Car'], train['Destination'], train['Min']]
-                        filtered_trains.append(filtered_train)
+                        if not filtered_train[1] in line_codes:
+                            filtered_trains.append(filtered_train)
                     #now we have to sort the filtered trains based on arrival time
                     sort_lambda = lambda x: sort_by_arrival(x)
                     filtered_trains.sort(key = sort_lambda)
@@ -85,7 +107,6 @@ while True:
 
             # Print arrival data
             print(station_name)
-            print(filtered_trains)
             max_lengths = [max(map(len, col)) for col in zip(*filtered_trains)]
             for row in filtered_trains:
                 formatted_row = ' '.join('{{:<{}}}'.format(length).format(elem) for length, elem in zip(max_lengths, row))
@@ -104,7 +125,3 @@ while True:
 #l: change lines: Red, Blue, Green, Orange, Yellow, Silver, Purple
 #s: flick through stations in alphabetical order
 #display will immediately update when new station is selected
-
-#should we indicate when the station has closed?
-#depending on hardware we will need to serialize the output to be put on wire.
-#nonetype has no length bug: there are other misc types such as "--" and "no passenger"
